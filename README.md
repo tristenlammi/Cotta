@@ -17,12 +17,12 @@ On a machine with git and Docker:
 curl -fsSL https://raw.githubusercontent.com/tristenlammi/Cotta/main/install.sh | sh
 ```
 
-The script prints the address to open, normally http://localhost:8080. If 8080 is already taken it uses the next free port. Choose a master passphrase when it opens; there is no way to recover it.
+The script prints the address to open: the machine's network address and a port, for example `http://192.168.1.20:8230`. It uses port 8230, or the next free one above it. Choose a master passphrase when it opens; there is no way to recover it.
 
-Cotta installs into `~/cotta` and answers only on that machine until you edit `~/cotta/.env`:
+Cotta installs into `~/cotta` as a container named `Cotta`, reachable from your local network. Settings are in `~/cotta/.env`:
 
-- set `TUNNEL_TOKEN` (and the `COTTA_CF_*` values) to use a Cloudflare Tunnel, or
-- set `COTTA_BIND=0.0.0.0` to open it to your local network.
+- set `COTTA_BIND=127.0.0.1` to answer on that machine only, or
+- set `TUNNEL_TOKEN` (and the `COTTA_CF_*` values) to add a Cloudflare Tunnel for access from outside.
 
 ## Update
 
@@ -31,6 +31,8 @@ cd ~/cotta && ./update.sh
 ```
 
 This pulls the latest version and restarts Cotta. Run it after editing `.env` too. Restarting ends running sessions; your servers, keys and saved commands are kept.
+
+Your data (the encrypted vault and settings) lives in the `data` folder inside the install folder. Back that folder up.
 
 ## Run from source
 

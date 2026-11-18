@@ -43,6 +43,34 @@ set_setting() {
 	fi
 }
 
+# --- data folder ---
+# Cotta's database lives in ./data, next to this script. The container does
+# not run as root, so the folder must belong to the user it runs as.
+mkdir -p data
+if [ "$(id -u)" = 0 ]; then
+	OWNER="65532:65532" # the image's built-in unprivileged user
+	chown -R "$OWNER" data
+else
+	OWNER="$(id -u):$(id -g)" # run the container as you, so you own the files
+	set_setting COTTA_UID "$(id -u)"
+	set_setting COTTA_GID "$(id -g)"
+fi
+chmod 700 data
+
+# One-time move for installs that kept data in a Docker volume.
+if [ ! -f data/cotta.db ]; then
+	OLD_VOLUME="$(docker volume ls -q --filter label=com.docker.compose.volume=cotta-data 2>/dev/null | head -n 1)"
+	if [ -n "$OLD_VOLUME" ]; then
+		say "Moving your data out of the Docker volume into $(pwd)/data"
+		docker compose down >/dev/null 2>&1 || true # stop Cotta so the database is at rest
+		docker run --rm -v "$OLD_VOLUME":/from:ro -v "$(pwd)/data":/to alpine \
+			sh -c "cp -a /from/. /to/ && chown -R $OWNER /to" ||
+			die "Couldn't copy the data. Nothing was deleted; the volume '$OLD_VOLUME' is untouched."
+		echo "Done. The old volume '$OLD_VOLUME' was left in place as a backup."
+		echo "Once you've checked Cotta works, remove it with: docker volume rm $OLD_VOLUME"
+	fi
+fi
+
 # --- port picking ---
 # True if something on this machine is already listening on TCP port $1.
 port_in_use() {
@@ -57,26 +85,43 @@ port_in_use() {
 	fi
 }
 
-# Print the first unused port, counting up from $1.
+FIRST_PORT=8230
+
+# Print the first unused port, counting up from FIRST_PORT.
 free_port() {
-	port="$1"
-	while [ "$port" -lt 8180 ] && port_in_use "$port"; do
+	port="$FIRST_PORT"
+	while [ "$port" -lt $((FIRST_PORT + 100)) ] && port_in_use "$port"; do
 		port=$((port + 1))
 	done
 	echo "$port"
 }
 
+# One-time change for early installs, recognised by a comment line their
+# .env was created with: those answered on this machine only and counted
+# ports up from 8080. Move them to the current defaults.
+OLD_NOTE='# Where Cotta listens on the Docker host. 127.0.0.1 = this machine only.'
+if grep -qxF "$OLD_NOTE" .env; then
+	if [ "$(setting COTTA_BIND)" = "127.0.0.1" ] && [ -z "$(setting TUNNEL_TOKEN)" ]; then
+		set_setting COTTA_BIND 0.0.0.0
+		echo "Cotta will now answer on this machine's network address, not just localhost."
+	fi
+	set_setting COTTA_PORT "" # re-picked below, from $FIRST_PORT
+	grep -vxF "$OLD_NOTE" .env > .env.tmp || true
+	cat .env.tmp > .env
+	rm -f .env.tmp
+fi
+
 PORT="$(setting COTTA_PORT)"
-PORT="${PORT:-8080}"
-# If Cotta is already running, it is the one holding its port: keep it.
-# Otherwise make sure the port is really free, and move up if it isn't.
-if [ -z "$(docker compose ps --status running -q cotta 2>/dev/null)" ] && port_in_use "$PORT"; then
+if [ -z "$PORT" ]; then
+	PORT="$(free_port)"
+	set_setting COTTA_PORT "$PORT"
+	echo "Cotta will use port $PORT (saved in .env)."
+elif [ -z "$(docker compose ps --status running -q cotta 2>/dev/null)" ] && port_in_use "$PORT"; then
+	# Cotta isn't running, so something else holds its port: move.
 	TAKEN="$PORT"
-	PORT="$(free_port 8080)"
+	PORT="$(free_port)"
 	set_setting COTTA_PORT "$PORT"
 	echo "Port $TAKEN is already in use on this machine, so Cotta will use $PORT (saved in .env)."
-elif ! grep -q "^COTTA_PORT=" .env; then
-	set_setting COTTA_PORT "$PORT"
 fi
 
 # --- start ---
@@ -88,18 +133,26 @@ else
 fi
 
 BIND="$(setting COTTA_BIND)"
-BIND="${BIND:-127.0.0.1}"
+BIND="${BIND:-0.0.0.0}"
+
+# This machine's address on the local network, if we can tell.
+lan_ip() {
+	ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1
+}
 
 say "Cotta is running."
 if [ "$BIND" = "127.0.0.1" ]; then
 	echo "Open http://localhost:$PORT on this machine and enter your master passphrase."
 	echo
-	echo "It only answers on this machine. To reach it from elsewhere, edit .env here:"
-	echo "  - set TUNNEL_TOKEN (and the COTTA_CF_* values) to use a Cloudflare Tunnel, or"
-	echo "  - set COTTA_BIND=0.0.0.0 to open it to your local network (trusted networks only)."
-	echo "Then run ./update.sh again."
+	echo "It only answers on this machine. To reach it from your network, set"
+	echo "COTTA_BIND=0.0.0.0 in .env here and run ./update.sh again."
 else
-	echo "Open http://<this machine's address>:$PORT and enter your master passphrase."
+	HOST_IP="$(lan_ip)"
+	[ -n "$HOST_IP" ] || HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+	echo "Open http://${HOST_IP:-<this machine's address>}:$PORT and enter your master passphrase."
+	echo
+	echo "Anyone on your network can reach that sign-in page. Don't forward this"
+	echo "port from the internet; use a Cloudflare Tunnel for access from outside."
 fi
 echo
-echo "Your data lives in the Docker volume 'cotta-data'. To stop: docker compose down"
+echo "Your data lives in $(pwd)/data — back that folder up. To stop: docker compose down"

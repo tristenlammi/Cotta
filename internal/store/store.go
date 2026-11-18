@@ -69,7 +69,10 @@ CREATE TABLE IF NOT EXISTS commands (
 `
 
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	// A rollback journal rather than WAL: there is a single connection, so
+	// WAL buys nothing, and it needs shared-memory files that misbehave on
+	// network and FUSE filesystems (NAS shares, Unraid's /mnt/user).
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(DELETE)&_pragma=synchronous(FULL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}

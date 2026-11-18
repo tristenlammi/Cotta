@@ -45,23 +45,28 @@ func healthcheck(addr string) {
 	os.Exit(0)
 }
 
+// firstPort is where the search for a free port starts. Inside the Docker
+// image the address is fixed at :8080 and the published port is chosen by
+// update.sh instead.
+const firstPort = 8230
+
 // listen opens addr. With no address configured it takes the first unused
-// port counting up from 8080, so Cotta starts even when 8080 is taken.
+// port counting up from firstPort.
 func listen(addr string) (net.Listener, error) {
 	if addr != "" {
 		return net.Listen("tcp", addr)
 	}
 	var err error
-	for port := 8080; port < 8180; port++ {
+	for port := firstPort; port < firstPort+100; port++ {
 		var ln net.Listener
 		if ln, err = net.Listen("tcp", fmt.Sprintf(":%d", port)); err == nil {
-			if port != 8080 {
-				log.Printf("port 8080 is in use; using %d instead", port)
+			if port != firstPort {
+				log.Printf("port %d is in use; using %d instead", firstPort, port)
 			}
 			return ln, nil
 		}
 	}
-	return nil, fmt.Errorf("no free port between 8080 and 8179: %w", err)
+	return nil, fmt.Errorf("no free port between %d and %d: %w", firstPort, firstPort+99, err)
 }
 
 func main() {
@@ -69,7 +74,7 @@ func main() {
 		healthcheck(env("COTTA_ADDR", ":8080"))
 	}
 	// Flags override the environment; handy for local development.
-	addrFlag := flag.String("addr", os.Getenv("COTTA_ADDR"), "address to listen on (default: first free port from 8080 up)")
+	addrFlag := flag.String("addr", os.Getenv("COTTA_ADDR"), "address to listen on (default: first free port from 8230 up)")
 	dataFlag := flag.String("data", env("COTTA_DATA", "data"), "directory for the database")
 	flag.Parse()
 	addr, dataDir := *addrFlag, *dataFlag
