@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/tristenlammi/Cotta/main/install.sh 
 
 The script prints the address to open: the machine's network address and a port, for example `http://192.168.1.20:8230`. It uses port 8230, or the next free one above it. Choose a master passphrase when it opens; there is no way to recover it.
 
-Cotta installs into `~/cotta` as a container named `Cotta`, reachable from your local network. Settings are in `~/cotta/.env`:
+Cotta installs into `~/cotta` (on Unraid, `/mnt/user/appdata/cotta`) as a container named `Cotta`, reachable from your local network. Settings are in the `.env` file there:
 
 - set `COTTA_BIND=127.0.0.1` to answer on that machine only, or
 - set `TUNNEL_TOKEN` (and the `COTTA_CF_*` values) to add a Cloudflare Tunnel for access from outside.
