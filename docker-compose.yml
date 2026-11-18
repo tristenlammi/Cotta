@@ -1,0 +1,31 @@
+# Cotta behind a Cloudflare Tunnel. Copy .env.example to .env and fill it in.
+#
+# The cotta container publishes no port: the only way in is the tunnel, and
+# with COTTA_CF_* set, requests that did not pass Cloudflare Access are refused.
+services:
+  cotta:
+    build: .
+    restart: unless-stopped
+    environment:
+      COTTA_CF_TEAM_DOMAIN: ${COTTA_CF_TEAM_DOMAIN:-}
+      COTTA_CF_AUD: ${COTTA_CF_AUD:-}
+      COTTA_IDLE_LOCK: ${COTTA_IDLE_LOCK:-12h}
+    volumes:
+      - cotta-data:/data
+    # To try Cotta locally without Cloudflare, uncomment this and open
+    # http://localhost:8080 — it is bound to this machine only.
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - cotta
+    profiles: ["tunnel"]
+
+volumes:
+  cotta-data:

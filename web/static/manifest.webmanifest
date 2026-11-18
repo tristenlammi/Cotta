@@ -1,0 +1,12 @@
+{
+  "name": "Cotta",
+  "short_name": "Cotta",
+  "description": "Self-hosted SSH, without the clutter",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#F5EFE8",
+  "theme_color": "#EDE4DA",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

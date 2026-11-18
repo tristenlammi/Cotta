@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cotta",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/cotta", "-addr", "127.0.0.1:8377", "-data", "data-dev"],
+      "port": 8377
+    },
+    {
+      "name": "devsshd",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/devsshd"],
+      "port": 2222
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+/data/
+/data-dev/
+/.env
+/cotta
+/cotta.exe
+/devsshd.exe
+*.test
