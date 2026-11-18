@@ -24,7 +24,13 @@ Cotta installs into `~/cotta` and answers only on that machine until you edit `~
 - set `TUNNEL_TOKEN` (and the `COTTA_CF_*` values) to use a Cloudflare Tunnel, or
 - set `COTTA_BIND=0.0.0.0` to open it to your local network.
 
-Run the install command again to apply changes or to update.
+## Update
+
+```bash
+cd ~/cotta && ./update.sh
+```
+
+This pulls the latest version and restarts Cotta. Run it after editing `.env` too. Restarting ends running sessions; your servers, keys and saved commands are kept.
 
 ## Run from source
 

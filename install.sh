@@ -1,5 +1,5 @@
 #!/bin/sh
-# Cotta installer. Run it again any time to update.
+# Cotta installer. To update later: cd ~/cotta && ./update.sh
 #
 #   curl -fsSL https://raw.githubusercontent.com/tristenlammi/Cotta/main/install.sh | sh
 #
@@ -55,7 +55,7 @@ if [ "$BIND" = "127.0.0.1" ]; then
 	echo "It only answers on this machine. To reach it from elsewhere, edit $DIR/.env:"
 	echo "  - set TUNNEL_TOKEN (and the COTTA_CF_* values) to use a Cloudflare Tunnel, or"
 	echo "  - set COTTA_BIND=0.0.0.0 to open it to your local network (trusted networks only)."
-	echo "Then run this script again."
+	echo "Then run: cd $DIR && ./update.sh"
 else
 	echo "Open http://<this machine's address>:$PORT and choose a master passphrase."
 fi
