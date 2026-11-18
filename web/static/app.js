@@ -144,8 +144,13 @@ async function boot() {
 function route() {
   if (!unlocked) return;
   const hash = location.hash || '#/';
-  const m = hash.match(/^#\/s\/([0-9a-f]+)$/);
-  if (m) return sessionView(m[1]);
+  const m = hash.match(/^#\/s\/([0-9a-f]+)(\/files)?$/);
+  if (m) {
+    const mode = m[2] ? 'files' : 'terminal';
+    // Switching between Terminal and Files keeps the same view alive.
+    if (view && view.sessionId === m[1]) return view.setMode(mode);
+    return sessionView(m[1], mode);
+  }
   if (hash === '#/keys') return keysView();
   return homeView();
 }
@@ -255,21 +260,23 @@ function estimateSize() {
   return { cols: Math.max(20, Math.floor((innerWidth - 60) / 8.4)), rows: Math.max(8, Math.floor((innerHeight - 190) / 18)) };
 }
 
-async function connect(host, password) {
+// connect starts a session and opens it on the terminal, or on Files when
+// files is true.
+async function connect(host, password, files = false) {
   try {
     const s = await api('POST', '/api/sessions', { hostId: host.id, password, ...estimateSize() });
     createdHere.add(s.id);
-    location.hash = '#/s/' + s.id;
+    location.hash = '#/s/' + s.id + (files ? '/files' : '');
   } catch (e) {
     if (e.code === 'password_required' || (e.code === 'auth_failed' && host.authType === 'ask')) {
       const pw = await askPassword(host, e.message);
-      if (pw) return connect(host, pw);
+      if (pw) return connect(host, pw, files);
     } else if (e.code === 'hostkey_unknown' || e.code === 'hostkey_changed') {
       if (await confirmHostKey(host, e.body)) {
         try {
           await api('POST', `/api/hosts/${host.id}/trust`, { hostKey: e.body.hostKey });
         } catch (e2) { toast(e2.message); return; }
-        return connect(host, password);
+        return connect(host, password, files);
       }
     } else if (e.status !== 401) {
       toast(`${host.name}: ${e.message}`);
@@ -403,6 +410,9 @@ async function homeView() {
               h('div', { class: 'card-text' }, h('strong', {}, x.name), h('span', { class: 'mono' }, addrOf(x)))),
             h('div', { class: 'card-meta' }, s ? 'Session running' : timeAgo(x.lastUsedAt)),
             h('div', { class: 'card-actions' }, go,
+              s
+                ? h('a', { class: 'btn', href: '#/s/' + s.id + '/files' }, 'Files')
+                : h('button', { class: 'btn', type: 'button', onclick: (ev) => withBusy(ev.currentTarget, 'Opening…', () => connect(x, undefined, true)) }, 'Files'),
               h('button', { class: 'btn icon-only', type: 'button', 'aria-label': `Edit ${x.name}`, onclick: () => openHostDialog({ host: x, onSaved: load }) }, icon('edit'))));
         }))
         : h('div', { class: 'empty' }, h('strong', {}, 'No servers yet'),
@@ -681,6 +691,334 @@ async function keysView() {
   load();
 }
 
+// ---------- files (SFTP over the session's connection) ----------
+
+function formatSize(n) {
+  if (n < 1000) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let i = -1;
+  do { n /= 1000; i++; } while (n >= 1000 && i < units.length - 1);
+  return `${n < 10 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
+}
+
+function formatWhen(iso) {
+  const d = new Date(iso), now = new Date();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const days = Math.floor((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  if (days === 0) return `Today ${time}`;
+  if (days === 1) return `Yesterday ${time}`;
+  return d.toLocaleDateString([], d.getFullYear() === now.getFullYear() ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+const UPLOAD_CHUNK = 8 * 1024 * 1024; // small enough for any proxy's body limit
+const UPLOAD_TEMP = (name) => `.${name}.cotta-upload`;
+
+// filesPane builds the Files view for one session. Nothing is loaded until
+// show() is first called.
+function filesPane(sessionId) {
+  const base = `/api/sessions/${sessionId}/files`;
+  let cwd = '', entries = [], selected = new Set(), showHidden = false;
+  let loaded = false, dead = false, dragDepth = 0, nextId = 1, pumping = false;
+  const transfers = []; // { id, file, dir, name, overwrite, sent, status, error, xhr }
+
+  const crumbs = h('nav', { class: 'crumbs', 'aria-label': 'Folder' });
+  const picker = h('input', { type: 'file', multiple: true, class: 'sr', tabindex: '-1', onchange: () => { addFiles([...picker.files]); picker.value = ''; } });
+  const hiddenBtn = h('button', { class: 'btn', type: 'button', 'aria-pressed': 'false', onclick: () => { showHidden = !showHidden; hiddenBtn.setAttribute('aria-pressed', String(showHidden)); paintList(); } }, 'Hidden files');
+  const bar = h('div', { class: 'files-bar' }, crumbs,
+    h('div', { class: 'files-tools' },
+      hiddenBtn,
+      h('button', { class: 'btn', type: 'button', onclick: newFolder }, 'New folder'),
+      h('button', { class: 'btn primary', type: 'button', onclick: () => picker.click() }, 'Upload'), picker));
+  const selBar = h('div', { class: 'files-select', style: 'display:none' });
+  const list = h('div', { class: 'files-list' });
+  const dropOverlay = h('div', { class: 'drop-overlay', style: 'display:none' });
+  const main = h('section', { class: 'files-main', 'aria-label': 'Files on the server' }, bar, selBar,
+    h('div', { class: 'files-cols', 'aria-hidden': 'true' }, h('span', {}), h('span', {}), h('span', {}, 'Name'), h('span', {}, 'Size'), h('span', {}, 'Modified'), h('span', {}, 'Permissions')),
+    list, dropOverlay);
+  const tray = h('aside', { class: 'tray', 'aria-label': 'Transfers' });
+  const el = h('div', { class: 'files', style: 'display:none' }, main, tray);
+
+  const visible = () => entries.filter((e) => showHidden || !e.name.startsWith('.'));
+  const join = (dir, name) => (dir.endsWith('/') ? dir : dir + '/') + name;
+
+  // ---- listing ----
+
+  async function load(path) {
+    list.replaceChildren(h('div', { class: 'files-note' }, 'Loading…'));
+    try {
+      const res = await api('GET', base + (path ? '?path=' + encodeURIComponent(path) : ''));
+      if (dead) return;
+      cwd = res.path;
+      entries = res.entries;
+      selected = new Set();
+      paintCrumbs();
+      paintList();
+    } catch (e) {
+      if (dead || e.status === 401) return;
+      const fatal = e.code === 'sftp_unavailable' || e.code === 'session_ended';
+      bar.style.display = fatal ? 'none' : '';
+      selBar.style.display = 'none';
+      list.replaceChildren(h('div', { class: 'files-note' },
+        h('strong', {}, fatal ? 'No file access here' : "Couldn't open that folder"), h('span', {}, e.message),
+        !fatal && h('button', { class: 'btn', type: 'button', onclick: () => load(cwd) }, cwd ? 'Back to ' + cwd : 'Try again')));
+    }
+  }
+  const refresh = () => load(cwd);
+
+  function paintCrumbs() {
+    const parts = cwd.split('/').filter(Boolean);
+    crumbs.replaceChildren(
+      h('button', { class: 'crumb', type: 'button', 'aria-label': 'Root folder', onclick: () => load('/') }, '/'),
+      ...parts.flatMap((p, i) => {
+        const to = '/' + parts.slice(0, i + 1).join('/');
+        const last = i === parts.length - 1;
+        return [
+          i > 0 ? h('span', { class: 'sep', 'aria-hidden': 'true' }, '/') : null,
+          last ? h('span', { class: 'crumb here' }, p) : h('button', { class: 'crumb', type: 'button', onclick: () => load(to) }, p),
+        ].filter(Boolean);
+      }));
+  }
+
+  function paintList() {
+    const rows = visible();
+    for (const name of [...selected]) if (!rows.some((e) => e.name === name)) selected.delete(name);
+    paintSelection();
+    if (!rows.length) {
+      list.replaceChildren(h('div', { class: 'files-note' },
+        h('strong', {}, 'This folder is empty'),
+        h('span', {}, entries.length ? 'It only holds hidden files.' : 'Drag files here from your device, or press Upload.')));
+      return;
+    }
+    list.replaceChildren(...rows.map((e) => {
+      const box = h('input', { type: 'checkbox', checked: selected.has(e.name), 'aria-label': `Select ${e.name}`, onchange: () => toggle(e.name, box.checked) });
+      const label = e.isDir
+        ? h('button', { class: 'fname', type: 'button', onclick: () => load(join(cwd, e.name)) }, e.name)
+        : h('button', { class: 'fname', type: 'button', onclick: () => { box.checked = !box.checked; toggle(e.name, box.checked); } }, e.name);
+      return h('div', { class: 'frow' + (selected.has(e.name) ? ' on' : '') },
+        box, h('span', { class: e.isDir ? 'ficon dir' : 'ficon', 'aria-hidden': 'true' }), label,
+        h('span', { class: 'fsize mono' }, e.isDir ? '—' : formatSize(e.size)),
+        h('span', { class: 'fwhen' }, formatWhen(e.modTime)),
+        h('span', { class: 'fmode mono' }, e.mode));
+    }));
+  }
+
+  function toggle(name, on) {
+    if (on) selected.add(name); else selected.delete(name);
+    for (const row of list.children) {
+      const box = row.querySelector('input[type=checkbox]');
+      if (box) row.classList.toggle('on', box.checked);
+    }
+    paintSelection();
+  }
+
+  function paintSelection() {
+    const picked = entries.filter((e) => selected.has(e.name));
+    selBar.style.display = picked.length ? '' : 'none';
+    if (!picked.length) return;
+    const bytes = picked.filter((e) => !e.isDir).reduce((sum, e) => sum + e.size, 0);
+    selBar.replaceChildren(
+      h('span', { class: 'spacer' }, `${picked.length} selected` + (bytes ? ` · ${formatSize(bytes)}` : '')),
+      h('button', { class: 'btn quiet', type: 'button', onclick: () => download(picked) }, 'Download'),
+      picked.length === 1 ? h('button', { class: 'btn quiet', type: 'button', onclick: () => rename(picked[0]) }, 'Rename') : '',
+      h('button', { class: 'btn danger', type: 'button', onclick: () => remove(picked) }, 'Delete'),
+      h('button', { class: 'btn ghost icon-only', type: 'button', 'aria-label': 'Clear selection', onclick: () => { selected = new Set(); paintList(); } }, icon('close')));
+  }
+
+  // ---- actions ----
+
+  function download(picked) {
+    const filesOnly = picked.filter((e) => !e.isDir);
+    if (filesOnly.length < picked.length) toast("Folders can't be downloaded yet — open the folder and pick the files.");
+    // The browser's own download manager takes over from here.
+    filesOnly.forEach((e, i) => setTimeout(() => {
+      const a = h('a', { href: `${base}/download?path=${encodeURIComponent(join(cwd, e.name))}`, download: e.name, style: 'display:none' });
+      document.body.append(a);
+      a.click();
+      a.remove();
+    }, i * 400));
+  }
+
+  async function askName(heading, label, value, action) {
+    const input = h('input', { class: 'input', type: 'text', required: true, value, autocapitalize: 'off', autocomplete: 'off', spellcheck: 'false' });
+    setTimeout(() => { input.focus(); input.select(); });
+    return modal({
+      title: heading,
+      body: h('label', { class: 'field' }, h('span', {}, label), input),
+      actions: [{ label: 'Cancel', value: null }, { label: action, primary: true, value: () => input.value.trim() }],
+    });
+  }
+
+  async function newFolder() {
+    const name = await askName('New folder', `Inside ${cwd}`, '', 'Create');
+    if (!name) return;
+    try { await api('POST', base + '/mkdir', { dir: cwd, name }); } catch (e) { if (e.status !== 401) toast(e.message); }
+    refresh();
+  }
+
+  async function rename(entry) {
+    const to = await askName(`Rename ${entry.name}`, 'New name', entry.name, 'Rename');
+    if (!to || to === entry.name) return;
+    try { await api('POST', base + '/rename', { dir: cwd, from: entry.name, to }); } catch (e) { if (e.status !== 401) toast(e.message); }
+    refresh();
+  }
+
+  async function remove(picked) {
+    const folders = picked.filter((e) => e.isDir).length;
+    const what = picked.length === 1 ? picked[0].name : `${picked.length} items`;
+    const ok = await modal({
+      title: `Delete ${what}?`,
+      body: h('p', { class: 'muted' }, (folders ? 'Folders are deleted with everything inside them. ' : '') + "This is permanent — the server has no recycle bin."),
+      actions: [{ label: 'Cancel', value: false }, { label: 'Delete', primary: true, value: true }],
+    });
+    if (!ok) return;
+    try { await api('POST', base + '/delete', { dir: cwd, names: picked.map((e) => e.name) }); } catch (e) { if (e.status !== 401) toast(e.message); }
+    refresh();
+  }
+
+  // ---- uploads ----
+
+  async function addFiles(fileList) {
+    const dir = cwd;
+    if (!dir || !fileList.length) return;
+    for (const file of fileList) {
+      let overwrite = false;
+      if (entries.some((e) => e.name === file.name)) {
+        overwrite = await modal({
+          title: `Replace ${file.name}?`,
+          body: h('p', { class: 'muted' }, `${dir} already has a file with this name. Replacing it can't be undone.`),
+          actions: [{ label: 'Skip', value: false }, { label: 'Replace', primary: true, value: true }],
+        });
+        if (!overwrite) continue;
+      }
+      transfers.push({ id: nextId++, file, dir, name: file.name, overwrite, sent: 0, status: 'queued', error: '', xhr: null });
+    }
+    paintTray();
+    pump();
+  }
+
+  // pump uploads one file at a time, in the order they were added.
+  async function pump() {
+    if (pumping) return;
+    pumping = true;
+    for (let t; (t = transfers.find((x) => x.status === 'queued'));) {
+      t.status = 'uploading';
+      paintTray();
+      try {
+        await uploadOne(t);
+        t.status = 'done';
+      } catch (e) {
+        if (t.status !== 'cancelled') { t.status = 'failed'; t.error = e.message; }
+        // Leave no half-written temporary file behind.
+        api('POST', base + '/delete', { dir: t.dir, names: [UPLOAD_TEMP(t.name)] }).catch(() => {});
+      }
+      t.xhr = null;
+      paintTray();
+      if (!dead && t.dir === cwd && t.status === 'done') refresh();
+    }
+    pumping = false;
+  }
+
+  async function uploadOne(t) {
+    let offset = 0;
+    do {
+      const blob = t.file.slice(offset, offset + UPLOAD_CHUNK);
+      const final = offset + blob.size >= t.file.size;
+      const q = new URLSearchParams({ dir: t.dir, name: t.name, offset: String(offset) });
+      if (final) q.set('final', '1');
+      if (t.overwrite) q.set('overwrite', '1');
+      const start = offset;
+      await new Promise((resolve, reject) => {
+        const xhr = t.xhr = new XMLHttpRequest(); // fetch can't report upload progress
+        xhr.open('POST', `${base}/upload?${q}`);
+        xhr.setRequestHeader('X-Cotta', '1');
+        xhr.upload.onprogress = (ev) => { t.sent = start + ev.loaded; paintTraySoon(); };
+        xhr.onload = () => {
+          if (xhr.status === 200) return resolve();
+          let msg = 'The upload failed.';
+          try { msg = JSON.parse(xhr.responseText).error || msg; } catch { /* not JSON */ }
+          if (xhr.status === 401) boot();
+          reject(new Error(msg));
+        };
+        xhr.onerror = () => reject(new Error("Lost contact with your Cotta server."));
+        xhr.onabort = () => reject(new Error('Cancelled'));
+        xhr.send(blob);
+      });
+      offset += blob.size;
+      t.sent = offset;
+    } while (offset < t.file.size);
+  }
+
+  function cancel(t) {
+    if (t.status === 'queued') t.status = 'cancelled';
+    else if (t.status === 'uploading') { t.status = 'cancelled'; t.xhr?.abort(); }
+    paintTray();
+  }
+
+  let trayTimer = 0;
+  function paintTraySoon() { if (!trayTimer) trayTimer = setTimeout(() => { trayTimer = 0; paintTray(); }, 150); }
+
+  function paintTray() {
+    if (dead) return;
+    tray.style.display = transfers.length ? '' : 'none';
+    const running = transfers.filter((t) => t.status === 'uploading' || t.status === 'queued').length;
+    const label = { queued: 'Queued', done: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
+    tray.replaceChildren(
+      h('div', { class: 'tray-head' }, h('strong', {}, 'Transfers'), h('span', { class: 'muted' }, running ? `${running} to go` : 'All finished')),
+      ...transfers.map((t) => {
+        const pct = t.file.size ? Math.min(100, Math.round((t.sent / t.file.size) * 100)) : (t.status === 'done' ? 100 : 0);
+        const active = t.status === 'uploading' || t.status === 'queued';
+        return h('div', { class: 'titem ' + t.status },
+          h('div', { class: 'trow' }, h('span', { class: 'mono tname' }, t.name), h('span', { class: 'tstate' }, t.status === 'uploading' ? `${pct}%` : label[t.status])),
+          h('div', { class: 'tbar' }, h('div', { style: `width:${t.status === 'done' ? 100 : pct}%` })),
+          h('div', { class: 'trow tmeta' },
+            h('span', {}, t.status === 'failed' ? t.error : `To ${t.dir} · ${t.status === 'uploading' ? formatSize(t.sent) + ' of ' : ''}${formatSize(t.file.size)}`),
+            active ? h('button', { type: 'button', onclick: () => cancel(t) }, 'Cancel') : ''));
+      }),
+      transfers.some((t) => t.status !== 'uploading' && t.status !== 'queued')
+        ? h('button', { class: 'btn', type: 'button', onclick: () => { for (let i = transfers.length - 1; i >= 0; i--) if (!['uploading', 'queued'].includes(transfers[i].status)) transfers.splice(i, 1); paintTray(); } }, 'Clear finished')
+        : '');
+  }
+
+  // ---- drag and drop from the device ----
+
+  const hasFiles = (ev) => [...(ev.dataTransfer?.types || [])].includes('Files');
+  el.addEventListener('dragenter', (ev) => {
+    if (!hasFiles(ev) || !cwd) return;
+    ev.preventDefault();
+    dragDepth++;
+    dropOverlay.replaceChildren(h('strong', {}, 'Drop to upload'), h('span', { class: 'mono' }, cwd));
+    dropOverlay.style.display = '';
+  });
+  el.addEventListener('dragover', (ev) => { if (hasFiles(ev)) ev.preventDefault(); });
+  el.addEventListener('dragleave', () => { if (dragDepth && --dragDepth === 0) dropOverlay.style.display = 'none'; });
+  el.addEventListener('drop', (ev) => {
+    if (!hasFiles(ev)) return;
+    ev.preventDefault();
+    dragDepth = 0;
+    dropOverlay.style.display = 'none';
+    const items = [...(ev.dataTransfer.items || [])];
+    const folders = items.filter((it) => it.webkitGetAsEntry?.()?.isDirectory).length;
+    const files = [...ev.dataTransfer.files].filter((f, i) => !items[i]?.webkitGetAsEntry?.()?.isDirectory);
+    if (folders) toast("Folders can't be uploaded yet — drop the files inside instead.");
+    addFiles(files);
+  });
+
+  // Leaving the page would cut uploads short; make the browser ask first.
+  const warnUnload = (ev) => { if (transfers.some((t) => t.status === 'uploading' || t.status === 'queued')) ev.preventDefault(); };
+  window.addEventListener('beforeunload', warnUnload);
+
+  paintTray();
+  return {
+    el,
+    show() { if (!loaded) { loaded = true; load(''); } },
+    destroy() {
+      dead = true;
+      window.removeEventListener('beforeunload', warnUnload);
+      for (const t of transfers) cancel(t);
+    },
+  };
+}
+
 // ---------- session (terminal) ----------
 
 const THEME = {
@@ -690,7 +1028,8 @@ const THEME = {
 };
 const CLOSE_ENDED = 4000;
 
-async function sessionView(id) {
+async function sessionView(id, mode = 'terminal') {
+  let fit = null;
   // gone: this view was replaced. closed: stop reconnecting (gone, or the session ended).
   let gone = false, closed = false, ws = null, attempt = 0, pingTimer = 0, pongTimer = 0, retryTimer = 0, listTimer = 0, ctrl = false, noted = false;
   let term = null, ro = null;
@@ -821,14 +1160,34 @@ async function sessionView(id) {
     term.focus();
   }
 
+  // Terminal and Files are two views of the same connection.
+  const tabTerm = h('a', { href: '#/s/' + id }, 'Terminal');
+  const tabFiles = h('a', { href: '#/s/' + id + '/files' }, 'Files');
+  const termWrap = h('section', { class: 'term-wrap', 'aria-label': 'Terminal' }, note, termEl, cmdBar, keys, overlay);
+  const files = filesPane(id);
+
   const root = h('div', { class: 'session' },
     tabs,
     h('div', { class: 'session-head' }, title, addr, pill, devices, h('div', { class: 'spacer' }),
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'View' }, tabTerm, tabFiles),
       h('button', {
         class: 'btn danger', type: 'button',
         onclick: async () => { if (await endSession({ id, name: title.textContent })) location.hash = '#/'; },
       }, 'End session')),
-    h('section', { class: 'term-wrap', 'aria-label': 'Terminal' }, note, termEl, cmdBar, keys, overlay));
+    termWrap, files.el);
+
+  function setMode(next) {
+    mode = next;
+    const onFiles = mode === 'files';
+    // The terminal is parked off-screen rather than hidden, so it keeps
+    // its size and keeps rendering output while you browse files.
+    termWrap.classList.toggle('offstage', onFiles);
+    files.el.style.display = onFiles ? '' : 'none';
+    tabTerm.toggleAttribute('aria-current', !onFiles);
+    tabFiles.toggleAttribute('aria-current', onFiles);
+    if (onFiles) files.show();
+    else if (term) { fit.fit(); term.focus(); }
+  }
 
   function setCtrl(on) { ctrl = on; ctrlBtn.setAttribute('aria-pressed', String(on)); }
   function setStatus(ok, text) { pill.className = 'pill' + (ok ? '' : ' busy'); pill.textContent = text; }
@@ -836,8 +1195,11 @@ async function sessionView(id) {
   function hideOverlay() { overlay.style.display = 'none'; }
 
   mount(root, {
+    sessionId: id,
+    setMode,
     destroy() {
       gone = closed = true;
+      files.destroy();
       clearInterval(pingTimer); clearTimeout(pongTimer); clearTimeout(retryTimer); clearInterval(listTimer);
       if (ws) ws.close();
       if (ro) ro.disconnect();
@@ -848,6 +1210,7 @@ async function sessionView(id) {
       if (term) term.dispose();
     },
   });
+  setMode(mode);
 
   // Keep the terminal above the on-screen keyboard.
   function onViewport() {
@@ -866,11 +1229,11 @@ async function sessionView(id) {
   await Promise.race([document.fonts.load('14px "JetBrains Mono"'), new Promise((r) => setTimeout(r, 1500))]);
   if (gone) return;
   term = new Terminal({ fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace', fontSize: coarse ? 13 : 14, lineHeight: 1.2, theme: THEME, cursorBlink: true, scrollback: 10000 });
-  const fit = new FitAddon.FitAddon();
+  fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(termEl);
-  fit.fit();
+  if (mode === 'terminal') fit.fit();
   paintCmds();
 
   // Pasting straight into the terminal (Ctrl+V, right-click, middle-click)
@@ -898,7 +1261,7 @@ async function sessionView(id) {
   });
   term.onBinary((d) => send(Uint8Array.from(d, (ch) => ch.charCodeAt(0))));
   term.onResize(sendSize);
-  ro = new ResizeObserver(debounce(() => { if (!gone) fit.fit(); }, 60));
+  ro = new ResizeObserver(debounce(() => { if (!gone && mode === 'terminal') fit.fit(); }, 60));
   ro.observe(termEl);
 
   function open() {
@@ -915,9 +1278,8 @@ async function sessionView(id) {
         attempt = 0;
         hideOverlay();
         setStatus(true, msg.latencyMs ? `Connected · ${msg.latencyMs} ms` : 'Connected');
-        fit.fit();
+        if (mode === 'terminal') { fit.fit(); term.focus(); }
         sendSize();
-        term.focus();
         clearInterval(pingTimer);
         pingTimer = setInterval(() => {
           sendJSON({ type: 'ping' });

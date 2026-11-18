@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -27,6 +28,10 @@ type Server struct {
 	Resizes []string
 	// AuthorizedKey, in authorized_keys format, may sign in as User.
 	AuthorizedKey string
+	// NoSFTP makes the server refuse file access, like much network gear.
+	NoSFTP bool
+
+	files sftp.Handlers // in-memory filesystem shared by all connections
 }
 
 // Authorize lets the given public key sign in.
@@ -50,7 +55,7 @@ func Start(addr, user, password string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{Addr: ln.Addr().String(), User: user, Password: password, HostKey: signer, ln: ln}
+	s := &Server{Addr: ln.Addr().String(), User: user, Password: password, HostKey: signer, ln: ln, files: sftp.InMemHandler()}
 	go s.serve()
 	return s, nil
 }
@@ -126,7 +131,7 @@ func (s *Server) handle(conn net.Conn) {
 
 func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 	defer ch.Close()
-	started := make(chan struct{})
+	started := make(chan string, 1) // "shell" or "sftp"
 	go func() {
 		for r := range reqs {
 			ok := false
@@ -135,7 +140,13 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 				ok = true
 			case "shell":
 				ok = true
-				close(started)
+				started <- "shell"
+			case "subsystem":
+				var sub struct{ Name string }
+				if ssh.Unmarshal(r.Payload, &sub) == nil && sub.Name == "sftp" && !s.NoSFTP {
+					ok = true
+					started <- "sftp"
+				}
 			case "window-change":
 				var wc struct{ Cols, Rows, W, H uint32 }
 				if ssh.Unmarshal(r.Payload, &wc) == nil {
@@ -150,7 +161,12 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			}
 		}
 	}()
-	<-started
+	if <-started == "sftp" {
+		// File access is served from memory: nothing on the real disk is
+		// read or written.
+		sftp.NewRequestServer(ch, s.files).Serve()
+		return
+	}
 
 	const prompt = "\x1b[38;5;209mdemo@testssh\x1b[0m:~$ "
 	io.WriteString(ch, "Cotta test shell. Lines are echoed back; try: help, colors, flood, vim, exit\r\n"+prompt)

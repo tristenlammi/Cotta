@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -65,6 +66,9 @@ type Session struct {
 	onEnd  func(*Session)
 
 	latency atomic.Int64
+
+	sftpMu sync.Mutex
+	sftpc  *sftp.Client // opened on first use, on the same SSH connection
 
 	mu         sync.Mutex
 	buf        []byte
@@ -331,6 +335,36 @@ func (s *Session) Input(sub *Sub, data []byte) error {
 	return err
 }
 
+var ErrEnded = errors.New("session has ended")
+
+// SFTP returns a file-transfer client running over this session's existing
+// SSH connection — no second login. It is opened the first time it is asked
+// for and reopened if the server closed it.
+func (s *Session) SFTP() (*sftp.Client, error) {
+	s.sftpMu.Lock()
+	defer s.sftpMu.Unlock()
+	if s.isClosed() {
+		return nil, ErrEnded
+	}
+	if s.sftpc != nil {
+		return s.sftpc, nil
+	}
+	c, err := sftp.NewClient(s.client)
+	if err != nil {
+		return nil, err
+	}
+	s.sftpc = c
+	go func() {
+		c.Wait() // returns when the SFTP channel closes
+		s.sftpMu.Lock()
+		if s.sftpc == c {
+			s.sftpc = nil
+		}
+		s.sftpMu.Unlock()
+	}()
+	return c, nil
+}
+
 // Size returns the terminal size currently in force.
 func (s *Session) Size() (cols, rows int) {
 	s.mu.Lock()
@@ -360,6 +394,11 @@ func (s *Session) Close() {
 	}
 	s.subs = map[*Sub]struct{}{}
 	s.mu.Unlock()
+	s.sftpMu.Lock()
+	if s.sftpc != nil {
+		s.sftpc.Close()
+	}
+	s.sftpMu.Unlock()
 	s.sess.Close()
 	s.client.Close()
 	s.onEnd(s)

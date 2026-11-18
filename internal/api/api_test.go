@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -338,5 +339,7 @@ func TestCrossSiteRequestsRefused(t *testing.T) {
 		t.Errorf("foreign Origin: got %d, want 403", code)
 	}
 }
+
+func decodeInto(r io.Reader, out *map[string]any) { json.NewDecoder(r).Decode(out) }
 
 func jsonID(v any) string { return strconv.FormatInt(int64(v.(float64)), 10) }

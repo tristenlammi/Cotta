@@ -67,6 +67,7 @@ func (a *API) Handler() http.Handler {
 	authed("POST /api/sessions", a.createSession)
 	authed("DELETE /api/sessions/{id}", a.endSession)
 	authed("GET /api/sessions/{id}/ws", a.attach)
+	a.registerFiles(authed)
 
 	mux.Handle("/", http.FileServerFS(a.Static))
 	return securityHeaders(auth.SameOrigin(mux))
