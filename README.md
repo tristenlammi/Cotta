@@ -5,6 +5,7 @@ Self-hosted SSH in the browser, without the clutter.
 - **One click to connect.** Paste `ssh user@host -p 2222`, a `user@host`, or a bare IP and Cotta fills in the rest.
 - **Sessions stay running on the server.** Close the tab, open Cotta on your phone, and pick up where you left off.
 - **Saved commands.** Keep commands per server (or for all of them) as buttons under the terminal. Saved commands and anything you paste are shown for review first, and only sent when you press Send.
+- **Light and dark.** Follows your system setting, with a switch to override it.
 - **No account, no cloud.** One small container; keys and passwords are encrypted with your master passphrase.
 
 Early MVP: terminal only. File transfer (SFTP) is next.

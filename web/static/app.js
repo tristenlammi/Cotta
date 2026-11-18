@@ -13,6 +13,8 @@ const ICONS = {
   edit: '<path d="M4 16l.8-3.6L13.5 3.7a1.6 1.6 0 012.3 0l.5.5a1.6 1.6 0 010 2.3L7.6 15.2z"/>',
   close: '<path d="M5 5l10 10M15 5L5 15"/>',
   servers: '<rect x="3" y="3.5" width="14" height="5.5" rx="1.8"/><rect x="3" y="11" width="14" height="5.5" rx="1.8"/><path d="M6 6.25h.01M6 13.75h.01"/>',
+  moon: '<path d="M16.5 11.8A7 7 0 018.2 3.5a7 7 0 108.3 8.3z"/>',
+  sun: '<circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4"/>',
   clipboard: '<rect x="4.5" y="4" width="11" height="13" rx="2"/><path d="M7.5 4V3.2A1.2 1.2 0 018.7 2h2.6a1.2 1.2 0 011.2 1.2V4M7.5 9h5M7.5 12.5h3.5"/>',
   key: '<circle cx="7" cy="13" r="3.2"/><path d="M9.3 10.7L16.5 3.5M13.5 6.5l2.2 2.2"/>',
   left: '<path d="M12 5l-5 5 5 5"/>', right: '<path d="M8 5l5 5-5 5"/>',
@@ -282,6 +284,42 @@ async function withBusy(btn, label, fn) {
   try { await fn(); } finally { btn.disabled = false; btn.textContent = old; }
 }
 
+// ---------- light / dark ----------
+// With no saved choice the system setting decides; the switch saves an
+// explicit choice in this browser (theme.js applies it before first paint).
+
+const systemDark = matchMedia('(prefers-color-scheme: dark)');
+function isDark() {
+  const chosen = document.documentElement.dataset.theme;
+  return chosen ? chosen === 'dark' : systemDark.matches;
+}
+function syncThemeColor() {
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', isDark() ? '#1D1512' : '#EDE4DA');
+}
+systemDark.addEventListener('change', syncThemeColor);
+syncThemeColor();
+
+// themeButton offers the theme you are not in. compact = icon only.
+function themeButton(compact) {
+  const btn = h('button', { class: 'btn ghost theme-switch' + (compact ? ' icon-only' : ''), type: 'button' });
+  const paint = () => {
+    const label = isDark() ? 'Light mode' : 'Dark mode';
+    btn.replaceChildren(icon(isDark() ? 'sun' : 'moon'), compact ? '' : label);
+    btn.setAttribute('aria-label', label);
+  };
+  btn.addEventListener('click', () => {
+    const next = isDark() ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('cotta-theme', next); } catch { /* still applies for this visit */ }
+    syncThemeColor();
+    document.querySelectorAll('.theme-switch').forEach((b) => b.dispatchEvent(new Event('repaint')));
+  });
+  btn.addEventListener('repaint', paint);
+  systemDark.addEventListener('change', paint);
+  paint();
+  return btn;
+}
+
 // ---------- shell chrome (sidebar / mobile bars) ----------
 
 function shell(active, main) {
@@ -293,10 +331,13 @@ function shell(active, main) {
         link('#/', 'All servers', 'home', h('span', { class: 'count' }, String(state.hosts.length || ''))),
         link('#/keys', 'Keys', 'keys')),
       h('div', { class: 'spacer' }),
-      h('button', { class: 'btn ghost', type: 'button', onclick: lockVault, style: 'justify-content:flex-start;border-color:var(--border)' }, icon('lock'), 'Lock vault')),
+      h('div', { class: 'nav' },
+        themeButton(false),
+        h('button', { class: 'btn ghost', type: 'button', onclick: lockVault }, icon('lock'), 'Lock vault'))),
     h('header', { class: 'topbar' },
       brand(),
       h('div', { class: 'actions' },
+        themeButton(true),
         h('button', { class: 'btn ghost icon-only', type: 'button', 'aria-label': 'Lock vault', onclick: lockVault }, icon('lock')))),
     main,
     h('nav', { class: 'tabbar', 'aria-label': 'Main' },
@@ -686,7 +727,7 @@ async function sessionView(id) {
 
   function paintCmds() {
     cmdBar.className = 'cmds' + (editingCmds ? ' editing' : '');
-    cmdBar.replaceChildren(
+    cmdBar.replaceChildren(...[
       h('button', { class: 'cmd clip', type: 'button', title: 'Review your clipboard, then send it', onpointerdown: keepFocus, onclick: openClipboard }, icon('clipboard'), 'Clipboard'),
       ...commands.map((c) => h('button', {
         class: 'cmd', type: 'button', title: editingCmds ? 'Edit this command' : c.command,
@@ -695,7 +736,8 @@ async function sessionView(id) {
       }, c.label || c.command.split('\n')[0])),
       h('button', { class: 'tool', type: 'button', onpointerdown: keepFocus, onclick: () => editCommand(null) }, commands.length ? '+ Add' : '+ Save a command'),
       commands.length ? h('button', { class: 'tool', type: 'button', 'aria-pressed': String(editingCmds), onpointerdown: keepFocus, onclick: () => { editingCmds = !editingCmds; paintCmds(); } }, editingCmds ? 'Done' : 'Edit') : null,
-      editingCmds ? h('span', { class: 'hint' }, 'Pick a command to change it') : null);
+      editingCmds ? h('span', { class: 'hint' }, 'Pick a command to change it') : null,
+    ].filter(Boolean)); // replaceChildren would print a bare null as text
   }
 
   // sendDialog is the only route for pasted or saved text into the session:

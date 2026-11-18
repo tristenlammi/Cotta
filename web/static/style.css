@@ -10,6 +10,32 @@
   --term-bg: #1F1612; --term-chrome: #2A1E18; --term-key: #3D2D25; --term-fg: #EADCCF; --term-dim: #A8917F; --term-prompt: #E8875C;
   --ui: Manrope, system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
   --r-control: 10px; --r-card: 16px; --r-dialog: 22px;
+  --border-strong: #CDBCAB; --primary-hover: #8E3F1E; --ok-ink: #2B3F22;
+  --shadow: rgba(91,48,26,.08);
+  color-scheme: light;
+}
+
+/* Dark theme. The same values appear twice: once for "follow the system"
+   and once for an explicit choice (data-theme is set by theme.js). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=light]) {
+    --ground: #15100D; --chrome: #1D1512; --surface: #2A1F1A; --border: #44332A; --hairline: #35271F;
+    --ink: #F1E6DB; --muted: #B8A394;
+    --primary: #B4532A; --primary-strong: #EE9A72; --tint: #4A2B1D; --tint-soft: #33211A; --tint-ink: #F3C9B2;
+    --ok: #A9CC96; --ok-bg: #26331F;
+    --border-strong: #5C463A; --primary-hover: #9E4722; --ok-ink: #CFE6C2;
+    --shadow: rgba(0,0,0,.35);
+    color-scheme: dark;
+  }
+}
+:root[data-theme=dark] {
+  --ground: #15100D; --chrome: #1D1512; --surface: #2A1F1A; --border: #44332A; --hairline: #35271F;
+  --ink: #F1E6DB; --muted: #B8A394;
+  --primary: #B4532A; --primary-strong: #EE9A72; --tint: #4A2B1D; --tint-soft: #33211A; --tint-ink: #F3C9B2;
+  --ok: #A9CC96; --ok-bg: #26331F;
+  --border-strong: #5C463A; --primary-hover: #9E4722; --ok-ink: #CFE6C2;
+  --shadow: rgba(0,0,0,.35);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -28,9 +54,9 @@ button { cursor: pointer; }
 
 /* ---- controls ---- */
 .btn { min-height: 44px; padding: 0 16px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border); border-radius: var(--r-control); background: var(--ground); font-weight: 700; font-size: 14px; white-space: nowrap; text-decoration: none; color: var(--ink); }
-.btn:hover { border-color: #CDBCAB; }
+.btn:hover { border-color: var(--border-strong); }
 .btn.primary { border-color: var(--primary); background: var(--primary); color: #fff; }
-.btn.primary:hover { background: var(--primary-strong); border-color: var(--primary-strong); }
+.btn.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .btn.outline { border: 1.5px solid var(--primary); background: transparent; color: var(--primary-strong); }
 .btn.quiet { background: var(--surface); }
 .btn.danger { color: var(--primary-strong); background: var(--surface); }
@@ -48,7 +74,7 @@ textarea.input { padding: 10px 12px; min-height: 120px; resize: vertical; line-h
 
 /* ---- gate (setup / unlock) ---- */
 .gate { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
-.gate form { width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-dialog); padding: 28px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 12px 40px rgba(91,48,26,.08); }
+.gate form { width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-dialog); padding: 28px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 12px 40px var(--shadow); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: -.02em; }
 .brand img { width: 28px; height: 28px; }
 .gate h1 { font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
@@ -59,6 +85,8 @@ textarea.input { padding: 10px 12px; min-height: 120px; resize: vertical; line-h
 .sidebar .brand { padding: 0 8px; }
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav a { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 0 12px; border-radius: var(--r-control); color: var(--ink); text-decoration: none; font-weight: 600; font-size: 14px; }
+.sidebar .nav .btn { justify-content: flex-start; padding: 0 12px; font-weight: 600; }
+.sidebar .nav .btn:hover { border-color: var(--border); }
 .nav a[aria-current] { background: var(--surface); font-weight: 700; box-shadow: 0 1px 0 var(--border); }
 .nav a .count { color: var(--muted); }
 .main { flex: 1; min-width: 0; padding: 36px 48px 56px; display: flex; flex-direction: column; gap: 32px; }
@@ -69,7 +97,7 @@ textarea.input { padding: 10px 12px; min-height: 120px; resize: vertical; line-h
 h1.title { font-size: 32px; font-weight: 800; letter-spacing: -.03em; }
 h2 { font-size: 18px; font-weight: 800; }
 
-.quick { display: flex; gap: 10px; max-width: 920px; background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-card); padding: 8px; box-shadow: 0 6px 20px rgba(91,48,26,.06); }
+.quick { display: flex; gap: 10px; max-width: 920px; background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-card); padding: 8px; box-shadow: 0 6px 20px var(--shadow); }
 .quick:focus-within { border-color: var(--primary); }
 .quick input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; padding: 0 12px; font: 500 16px var(--mono); }
 .quick .btn { min-height: 48px; padding: 0 22px; font-size: 15px; border-radius: 11px; }
@@ -96,7 +124,7 @@ h2 { font-size: 18px; font-weight: 800; }
 
 /* ---- dialogs ---- */
 dialog { border: 0; padding: 0; background: var(--surface); color: var(--ink); border-radius: var(--r-dialog); width: min(520px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); box-shadow: 0 24px 80px rgba(43,29,22,.3); }
-dialog::backdrop { background: rgba(43,29,22,.45); }
+dialog::backdrop { background: rgba(20,13,10,.6); }
 dialog form { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
 dialog h2 { font-size: 22px; letter-spacing: -.02em; }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -110,7 +138,7 @@ legend { margin-bottom: 6px; }
 .choice .input { min-height: 40px; }
 .choice small { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: auto; text-align: right; }
 .check { border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; background: var(--ground); color: var(--muted); }
-.check.ok { background: var(--ok-bg); color: #2B3F22; }
+.check.ok { background: var(--ok-bg); color: var(--ok-ink); }
 .check.warn { background: var(--tint); color: var(--tint-ink); }
 .check strong { font-weight: 800; font-size: 14px; }
 .check .mono { font-size: 12px; font-weight: 500; word-break: break-all; }
