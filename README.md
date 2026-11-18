@@ -17,7 +17,7 @@ On a machine with git and Docker:
 curl -fsSL https://raw.githubusercontent.com/tristenlammi/Cotta/main/install.sh | sh
 ```
 
-Then open http://localhost:8080 and choose a master passphrase. There is no way to recover it.
+The script prints the address to open, normally http://localhost:8080. If 8080 is already taken it uses the next free port. Choose a master passphrase when it opens; there is no way to recover it.
 
 Cotta installs into `~/cotta` and answers only on that machine until you edit `~/cotta/.env`:
 

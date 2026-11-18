@@ -27,13 +27,41 @@ else
 fi
 cd "$DIR"
 
-if [ ! -f .env ]; then
-	cp .env.example .env
-	chmod 600 .env
-fi
-
 # Read a value from .env without executing the file.
 setting() { sed -n "s/^$1=//p" .env | tail -n 1; }
+
+# --- port picking ---
+# True if something on this machine is already listening on TCP port $1.
+port_in_use() {
+	if command -v ss >/dev/null 2>&1; then
+		ss -Hltn 2>/dev/null | awk '{print $4}' | grep -q "[:.]$1\$"
+	elif command -v netstat >/dev/null 2>&1; then
+		netstat -an 2>/dev/null | grep -i listen | awk '{print $4}' | grep -q "[:.]$1\$"
+	elif command -v nc >/dev/null 2>&1; then
+		nc -z 127.0.0.1 "$1" >/dev/null 2>&1
+	else
+		return 1 # no way to check; assume it is free
+	fi
+}
+
+# Print the first unused port, counting up from 8080.
+free_port() {
+	port=8080
+	while [ "$port" -lt 8180 ] && port_in_use "$port"; do
+		port=$((port + 1))
+	done
+	echo "$port"
+}
+# --- end port picking ---
+
+# First install: create .env and choose a port. Later runs keep the port
+# already in .env, since by then Cotta itself is the one using it.
+if [ ! -f .env ]; then
+	PICKED="$(free_port)"
+	sed "s/^COTTA_PORT=.*/COTTA_PORT=$PICKED/" .env.example > .env
+	chmod 600 .env
+	[ "$PICKED" = 8080 ] || echo "Port 8080 is taken on this machine, so Cotta will use $PICKED."
+fi
 
 if [ -n "$(setting TUNNEL_TOKEN)" ]; then
 	say "Building and starting Cotta with the Cloudflare Tunnel"

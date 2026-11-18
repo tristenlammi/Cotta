@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -44,12 +45,31 @@ func healthcheck(addr string) {
 	os.Exit(0)
 }
 
+// listen opens addr. With no address configured it takes the first unused
+// port counting up from 8080, so Cotta starts even when 8080 is taken.
+func listen(addr string) (net.Listener, error) {
+	if addr != "" {
+		return net.Listen("tcp", addr)
+	}
+	var err error
+	for port := 8080; port < 8180; port++ {
+		var ln net.Listener
+		if ln, err = net.Listen("tcp", fmt.Sprintf(":%d", port)); err == nil {
+			if port != 8080 {
+				log.Printf("port 8080 is in use; using %d instead", port)
+			}
+			return ln, nil
+		}
+	}
+	return nil, fmt.Errorf("no free port between 8080 and 8179: %w", err)
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		healthcheck(env("COTTA_ADDR", ":8080"))
 	}
 	// Flags override the environment; handy for local development.
-	addrFlag := flag.String("addr", env("COTTA_ADDR", ":8080"), "address to listen on")
+	addrFlag := flag.String("addr", os.Getenv("COTTA_ADDR"), "address to listen on (default: first free port from 8080 up)")
 	dataFlag := flag.String("data", env("COTTA_DATA", "data"), "directory for the database")
 	flag.Parse()
 	addr, dataDir := *addrFlag, *dataFlag
@@ -85,10 +105,17 @@ func main() {
 		log.Printf("Cloudflare Access check is off: don't expose this port beyond a trusted network")
 	}
 
-	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	ln, err := listen(addr)
+	if err != nil {
+		log.Fatalf("server: %v", err)
+	}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
-		log.Printf("Cotta listening on %s, data in %s", addr, dataDir)
-		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("Cotta listening on %s, data in %s", ln.Addr(), dataDir)
+		if _, port, err := net.SplitHostPort(ln.Addr().String()); err == nil {
+			log.Printf("Open http://localhost:%s", port)
+		}
+		if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server: %v", err)
 		}
 	}()
