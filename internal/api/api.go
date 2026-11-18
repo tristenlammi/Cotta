@@ -36,6 +36,7 @@ type API struct {
 const (
 	purposePassword = "host-password"
 	purposeKey      = "key-private"
+	purposeCommand  = "saved-command"
 )
 
 func (a *API) Handler() http.Handler {
@@ -58,6 +59,10 @@ func (a *API) Handler() http.Handler {
 	authed("GET /api/keys", a.listKeys)
 	authed("POST /api/keys", a.createKey)
 	authed("DELETE /api/keys/{id}", a.deleteKey)
+	authed("GET /api/commands", a.listCommands)
+	authed("POST /api/commands", a.createCommand)
+	authed("PUT /api/commands/{id}", a.updateCommand)
+	authed("DELETE /api/commands/{id}", a.deleteCommand)
 	authed("GET /api/sessions", a.listSessions)
 	authed("POST /api/sessions", a.createSession)
 	authed("DELETE /api/sessions/{id}", a.endSession)
@@ -554,6 +559,140 @@ func (a *API) deleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.Store.DeleteKey(id); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---- saved commands ----
+
+type commandJSON struct {
+	ID      int64  `json:"id"`
+	HostID  *int64 `json:"hostId"` // null = shown on every server
+	Label   string `json:"label"`
+	Command string `json:"command"`
+}
+
+// commandData is what gets encrypted.
+type commandData struct {
+	Label   string `json:"label"`
+	Command string `json:"command"`
+}
+
+func (a *API) toCommandJSON(c *store.Command) (commandJSON, error) {
+	raw, err := a.Vault.Decrypt(purposeCommand, c.DataEnc)
+	if err != nil {
+		return commandJSON{}, err
+	}
+	var d commandData
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return commandJSON{}, err
+	}
+	return commandJSON{ID: c.ID, HostID: c.HostID, Label: d.Label, Command: d.Command}, nil
+}
+
+// readCommand validates the request body and fills c from it. It reports
+// false after writing an error response.
+func (a *API) readCommand(w http.ResponseWriter, r *http.Request, c *store.Command) bool {
+	var in commandJSON
+	if !readJSON(w, r, &in) {
+		return false
+	}
+	in.Label = strings.TrimSpace(in.Label)
+	in.Command = strings.TrimRight(strings.ReplaceAll(in.Command, "\r\n", "\n"), "\n ")
+	switch {
+	case strings.TrimSpace(in.Command) == "":
+		fail(w, http.StatusUnprocessableEntity, "invalid", "Enter the command to save.")
+		return false
+	case len(in.Command) > 8000 || len(in.Label) > 80:
+		fail(w, http.StatusUnprocessableEntity, "invalid", "That's too long to save as a command.")
+		return false
+	}
+	if in.HostID != nil {
+		if _, err := a.Store.GetHost(*in.HostID); errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusUnprocessableEntity, "invalid", "That server no longer exists.")
+			return false
+		} else if err != nil {
+			serverError(w, err)
+			return false
+		}
+	}
+	raw, _ := json.Marshal(commandData{Label: in.Label, Command: in.Command})
+	enc, err := a.Vault.Encrypt(purposeCommand, raw)
+	if err != nil {
+		serverError(w, err)
+		return false
+	}
+	c.HostID, c.DataEnc = in.HostID, enc
+	return true
+}
+
+func (a *API) listCommands(w http.ResponseWriter, r *http.Request) {
+	hostID, _ := strconv.ParseInt(r.URL.Query().Get("hostId"), 10, 64)
+	cmds, err := a.Store.ListCommands(hostID)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	out := make([]commandJSON, 0, len(cmds))
+	for _, c := range cmds {
+		j, err := a.toCommandJSON(c)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		out = append(out, j)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *API) createCommand(w http.ResponseWriter, r *http.Request) {
+	c := &store.Command{}
+	if !a.readCommand(w, r, c) {
+		return
+	}
+	if err := a.Store.CreateCommand(c); err != nil {
+		serverError(w, err)
+		return
+	}
+	j, _ := a.toCommandJSON(c)
+	writeJSON(w, http.StatusCreated, j)
+}
+
+func (a *API) updateCommand(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	var c *store.Command
+	var err error
+	if ok {
+		c, err = a.Store.GetCommand(id)
+	}
+	if !ok || errors.Is(err, store.ErrNotFound) {
+		fail(w, http.StatusNotFound, "not_found", "That saved command no longer exists.")
+		return
+	}
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if !a.readCommand(w, r, c) {
+		return
+	}
+	if err := a.Store.UpdateCommand(c); err != nil {
+		serverError(w, err)
+		return
+	}
+	j, _ := a.toCommandJSON(c)
+	writeJSON(w, http.StatusOK, j)
+}
+
+func (a *API) deleteCommand(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		fail(w, http.StatusNotFound, "not_found", "No such saved command.")
+		return
+	}
+	if err := a.Store.DeleteCommand(id); err != nil {
 		serverError(w, err)
 		return
 	}

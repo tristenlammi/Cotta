@@ -276,6 +276,49 @@ func TestKeySignIn(t *testing.T) {
 	}
 }
 
+func TestSavedCommands(t *testing.T) {
+	h := newHarness(t)
+	h.do("POST", "/api/setup", map[string]any{"passphrase": "correct horse battery"})
+	mkHost := func(name string) any {
+		_, saved := h.do("POST", "/api/hosts", map[string]any{"name": name, "user": "demo", "host": "192.168.50.10", "authType": "ask"})
+		return saved["id"]
+	}
+	a, b := mkHost("a"), mkHost("b")
+	list := func(hostID any) []any {
+		_, out := h.do("GET", "/api/commands?hostId="+jsonID(hostID), nil)
+		l, _ := out["list"].([]any)
+		return l
+	}
+
+	code, mine := h.do("POST", "/api/commands", map[string]any{"hostId": a, "label": "Restart", "command": "sudo systemctl restart nginx\r\n"})
+	if code != http.StatusCreated || mine["command"] != "sudo systemctl restart nginx" {
+		t.Fatalf("create: %d %v", code, mine)
+	}
+	h.do("POST", "/api/commands", map[string]any{"hostId": nil, "command": "df -h"})
+	if code, _ := h.do("POST", "/api/commands", map[string]any{"hostId": a, "command": "   "}); code != http.StatusUnprocessableEntity {
+		t.Fatalf("empty command: got %d, want 422", code)
+	}
+
+	// Server a sees its own command and the shared one; b only the shared one.
+	if l := list(a); len(l) != 2 {
+		t.Fatalf("commands for a: %v", l)
+	}
+	if l := list(b); len(l) != 1 || l[0].(map[string]any)["command"] != "df -h" {
+		t.Fatalf("commands for b: %v", l)
+	}
+
+	code, edited := h.do("PUT", "/api/commands/"+jsonID(mine["id"]), map[string]any{"hostId": a, "label": "Reload", "command": "sudo systemctl reload nginx"})
+	if code != http.StatusOK || edited["label"] != "Reload" {
+		t.Fatalf("update: %d %v", code, edited)
+	}
+
+	// Deleting a server removes its commands but not the shared ones.
+	h.do("DELETE", "/api/hosts/"+jsonID(a), nil)
+	if l := list(a); len(l) != 1 {
+		t.Fatalf("after deleting the server: %v", l)
+	}
+}
+
 func TestCrossSiteRequestsRefused(t *testing.T) {
 	h := newHarness(t)
 	post := func(setHeader func(*http.Request)) int {

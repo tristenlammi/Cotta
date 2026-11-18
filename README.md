@@ -4,26 +4,33 @@ Self-hosted SSH in the browser, without the clutter.
 
 - **One click to connect.** Paste `ssh user@host -p 2222`, a `user@host`, or a bare IP and Cotta fills in the rest.
 - **Sessions stay running on the server.** Close the tab, open Cotta on your phone, and pick up where you left off.
+- **Saved commands.** Keep commands per server (or for all of them) as buttons under the terminal. Saved commands and anything you paste are shown for review first, and only sent when you press Send.
 - **No account, no cloud.** One small container; keys and passwords are encrypted with your master passphrase.
 
 Early MVP: terminal only. File transfer (SFTP) is next.
 
-## Run
+## Install
+
+On a machine with git and Docker:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tristenlammi/Cotta/main/install.sh | sh
+```
+
+Then open http://localhost:8080 and choose a master passphrase. There is no way to recover it.
+
+Cotta installs into `~/cotta` and answers only on that machine until you edit `~/cotta/.env`:
+
+- set `TUNNEL_TOKEN` (and the `COTTA_CF_*` values) to use a Cloudflare Tunnel, or
+- set `COTTA_BIND=0.0.0.0` to open it to your local network.
+
+Run the install command again to apply changes or to update.
+
+## Run from source
 
 ```bash
 go run ./cmd/cotta
 ```
-
-Open http://localhost:8080 and choose a master passphrase. There is no way to recover it.
-
-## Docker
-
-```bash
-cp .env.example .env
-docker compose --profile tunnel up -d --build
-```
-
-This runs Cotta behind a Cloudflare Tunnel with no port published; fill in `.env` first. To try it locally instead, uncomment the `ports` lines in `docker-compose.yml` and drop `--profile tunnel`.
 
 ## Good to know
 

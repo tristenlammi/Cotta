@@ -13,6 +13,7 @@ const ICONS = {
   edit: '<path d="M4 16l.8-3.6L13.5 3.7a1.6 1.6 0 012.3 0l.5.5a1.6 1.6 0 010 2.3L7.6 15.2z"/>',
   close: '<path d="M5 5l10 10M15 5L5 15"/>',
   servers: '<rect x="3" y="3.5" width="14" height="5.5" rx="1.8"/><rect x="3" y="11" width="14" height="5.5" rx="1.8"/><path d="M6 6.25h.01M6 13.75h.01"/>',
+  clipboard: '<rect x="4.5" y="4" width="11" height="13" rx="2"/><path d="M7.5 4V3.2A1.2 1.2 0 018.7 2h2.6a1.2 1.2 0 011.2 1.2V4M7.5 9h5M7.5 12.5h3.5"/>',
   key: '<circle cx="7" cy="13" r="3.2"/><path d="M9.3 10.7L16.5 3.5M13.5 6.5l2.2 2.2"/>',
   left: '<path d="M12 5l-5 5 5 5"/>', right: '<path d="M8 5l5 5-5 5"/>',
   up: '<path d="M5 12l5-5 5 5"/>', down: '<path d="M5 8l5 5 5-5"/>',
@@ -678,6 +679,106 @@ async function sessionView(id) {
     keyBtn(icon('down'), arrow('B'), 'Down'), keyBtn(icon('right'), arrow('C'), 'Right'),
     keyBtn('|', '|'), keyBtn('~', '~'), keyBtn('/', '/'));
 
+  // Saved commands: one press types the command and presses Enter.
+  const cmdBar = h('div', { class: 'cmds', role: 'toolbar', 'aria-label': 'Saved commands' });
+  let hostId = null, commands = [], editingCmds = false;
+  const keepFocus = (ev) => ev.preventDefault(); // don't take focus (or the on-screen keyboard) from the terminal
+
+  function paintCmds() {
+    cmdBar.className = 'cmds' + (editingCmds ? ' editing' : '');
+    cmdBar.replaceChildren(
+      h('button', { class: 'cmd clip', type: 'button', title: 'Review your clipboard, then send it', onpointerdown: keepFocus, onclick: openClipboard }, icon('clipboard'), 'Clipboard'),
+      ...commands.map((c) => h('button', {
+        class: 'cmd', type: 'button', title: editingCmds ? 'Edit this command' : c.command,
+        onpointerdown: keepFocus,
+        onclick: () => (editingCmds ? editCommand(c) : sendDialog({ title: c.label || 'Send saved command', text: c.command, enter: true })),
+      }, c.label || c.command.split('\n')[0])),
+      h('button', { class: 'tool', type: 'button', onpointerdown: keepFocus, onclick: () => editCommand(null) }, commands.length ? '+ Add' : '+ Save a command'),
+      commands.length ? h('button', { class: 'tool', type: 'button', 'aria-pressed': String(editingCmds), onpointerdown: keepFocus, onclick: () => { editingCmds = !editingCmds; paintCmds(); } }, editingCmds ? 'Done' : 'Edit') : null,
+      editingCmds ? h('span', { class: 'hint' }, 'Pick a command to change it') : null);
+  }
+
+  // sendDialog is the only route for pasted or saved text into the session:
+  // it shows the text so it can be checked or changed, and nothing is sent
+  // until Send is pressed.
+  let sendOpen = false;
+  async function sendDialog({ title: heading, text, enter, hint }) {
+    if (sendOpen || !term) return;
+    sendOpen = true;
+    const area = h('textarea', { class: 'input mono', required: true, spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off' });
+    area.value = text;
+    area.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); area.form.requestSubmit(); }
+    });
+    const tick = h('input', { type: 'checkbox', checked: enter });
+    setTimeout(() => area.focus());
+    const val = await modal({
+      title: heading,
+      body: [
+        hint && h('p', { class: 'muted' }, hint),
+        h('label', { class: 'field' }, h('span', {}, `Will be typed into ${title.textContent}`), area),
+        h('label', { class: 'tick' }, tick, 'Press Enter after sending'),
+      ],
+      actions: [{ label: 'Cancel', value: null }, { label: 'Send', primary: true, value: () => ({ text: area.value, enter: tick.checked }) }],
+    });
+    sendOpen = false;
+    if (gone) return;
+    if (val && val.text) {
+      term.paste(val.text); // honours the remote app's bracketed-paste mode
+      if (val.enter) send(enc.encode('\r'));
+    }
+    term.focus();
+  }
+
+  async function openClipboard() {
+    let text = '', hint = '';
+    try {
+      if (!navigator.clipboard?.readText) throw new Error('unavailable');
+      text = await navigator.clipboard.readText();
+      if (!text) hint = 'Your clipboard has no text in it. Type or paste below.';
+    } catch {
+      hint = "Your browser didn't let Cotta read the clipboard. Paste into the box below instead.";
+    }
+    sendDialog({ title: 'Send from clipboard', text, enter: false, hint });
+  }
+
+  async function loadCmds() {
+    if (hostId == null) return;
+    try { commands = await api('GET', '/api/commands?hostId=' + hostId); } catch { return; }
+    if (!commands.length) editingCmds = false;
+    if (!gone) paintCmds();
+  }
+
+  async function editCommand(c) {
+    const label = h('input', { class: 'input', type: 'text', value: c?.label || '', maxlength: '80', placeholder: 'Optional — shown on the button' });
+    const text = h('textarea', { class: 'input mono', required: true, spellcheck: 'false', autocapitalize: 'off', placeholder: 'sudo systemctl restart nginx' });
+    text.value = c?.command || '';
+    const everywhere = h('input', { type: 'checkbox', checked: c ? c.hostId == null : false });
+    setTimeout(() => text.focus());
+    const val = await modal({
+      title: c ? 'Edit saved command' : 'Save a command',
+      body: [
+        h('label', { class: 'field' }, h('span', {}, 'Command'), text),
+        h('label', { class: 'field' }, h('span', {}, 'Button label'), label),
+        h('label', { class: 'tick' }, everywhere, `Show on every server, not just ${title.textContent}`),
+        h('p', { class: 'muted' }, 'Pressing the button shows the command so you can check or change it before sending.'),
+      ],
+      actions: [
+        c && { label: 'Delete', value: 'delete', class: 'danger' },
+        { label: 'Cancel', value: null },
+        { label: 'Save', primary: true, value: () => ({ label: label.value, command: text.value, hostId: everywhere.checked ? null : hostId }) },
+      ].filter(Boolean),
+    });
+    if (!val) { term.focus(); return; }
+    try {
+      if (val === 'delete') await api('DELETE', '/api/commands/' + c.id);
+      else if (c) await api('PUT', '/api/commands/' + c.id, val);
+      else await api('POST', '/api/commands', val);
+    } catch (e) { if (e.status !== 401) toast(e.message); }
+    await loadCmds();
+    term.focus();
+  }
+
   const root = h('div', { class: 'session' },
     tabs,
     h('div', { class: 'session-head' }, title, addr, pill, devices, h('div', { class: 'spacer' }),
@@ -685,7 +786,7 @@ async function sessionView(id) {
         class: 'btn danger', type: 'button',
         onclick: async () => { if (await endSession({ id, name: title.textContent })) location.hash = '#/'; },
       }, 'End session')),
-    h('section', { class: 'term-wrap', 'aria-label': 'Terminal' }, note, termEl, keys, overlay));
+    h('section', { class: 'term-wrap', 'aria-label': 'Terminal' }, note, termEl, cmdBar, keys, overlay));
 
   function setCtrl(on) { ctrl = on; ctrlBtn.setAttribute('aria-pressed', String(on)); }
   function setStatus(ok, text) { pill.className = 'pill' + (ok ? '' : ' busy'); pill.textContent = text; }
@@ -728,6 +829,15 @@ async function sessionView(id) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(termEl);
   fit.fit();
+  paintCmds();
+
+  // Pasting straight into the terminal (Ctrl+V, right-click, middle-click)
+  // is diverted to the review dialog instead of being typed blind.
+  termEl.addEventListener('paste', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    sendDialog({ title: 'Paste into session', text: ev.clipboardData?.getData('text/plain') || '', enter: false });
+  }, true);
 
   function send(bytes) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(bytes); }
   function sendJSON(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
@@ -831,6 +941,7 @@ async function sessionView(id) {
       title.textContent = me.name;
       addr.textContent = me.addr;
       document.title = `${me.name} — Cotta`;
+      if (hostId == null) { hostId = me.hostId; loadCmds(); }
       if (!noted && !createdHere.has(id)) {
         noted = true;
         note.replaceChildren(h('span', {}, `Picked up where you left off — this session has been running ${runningFor(me.startedAt)}.`),

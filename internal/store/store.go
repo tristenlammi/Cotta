@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS hosts (
 	last_used_at INTEGER,
 	created_at   INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS commands (
+	id       INTEGER PRIMARY KEY AUTOINCREMENT,
+	host_id  INTEGER REFERENCES hosts(id) ON DELETE CASCADE, -- NULL = every server
+	data_enc BLOB NOT NULL
+);
 `
 
 func Open(path string) (*Store, error) {
@@ -174,6 +179,73 @@ func (s *Store) TouchHost(id int64) error {
 
 func (s *Store) DeleteHost(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM hosts WHERE id = ?`, id)
+	return err
+}
+
+// ---- saved commands ----
+
+// Command is a saved command. Its label and text are encrypted together in
+// DataEnc, since commands often embed hostnames, paths or tokens.
+type Command struct {
+	ID      int64
+	HostID  *int64 // nil = shown on every server
+	DataEnc []byte
+}
+
+func scanCommand(r scanner) (*Command, error) {
+	var c Command
+	var hostID sql.NullInt64
+	if err := r.Scan(&c.ID, &hostID, &c.DataEnc); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if hostID.Valid {
+		c.HostID = &hostID.Int64
+	}
+	return &c, nil
+}
+
+// ListCommands returns the commands for one server plus the ones shown on
+// every server, oldest first.
+func (s *Store) ListCommands(hostID int64) ([]*Command, error) {
+	rows, err := s.db.Query(`SELECT id, host_id, data_enc FROM commands WHERE host_id = ? OR host_id IS NULL ORDER BY id`, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Command
+	for rows.Next() {
+		c, err := scanCommand(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetCommand(id int64) (*Command, error) {
+	return scanCommand(s.db.QueryRow(`SELECT id, host_id, data_enc FROM commands WHERE id = ?`, id))
+}
+
+func (s *Store) CreateCommand(c *Command) error {
+	res, err := s.db.Exec(`INSERT INTO commands(host_id, data_enc) VALUES(?, ?)`, c.HostID, c.DataEnc)
+	if err != nil {
+		return err
+	}
+	c.ID, err = res.LastInsertId()
+	return err
+}
+
+func (s *Store) UpdateCommand(c *Command) error {
+	_, err := s.db.Exec(`UPDATE commands SET host_id = ?, data_enc = ? WHERE id = ?`, c.HostID, c.DataEnc, c.ID)
+	return err
+}
+
+func (s *Store) DeleteCommand(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM commands WHERE id = ?`, id)
 	return err
 }
 

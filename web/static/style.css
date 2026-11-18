@@ -140,6 +140,18 @@ legend { margin-bottom: 6px; }
 .term .xterm-viewport { background: transparent !important; }
 .term-overlay { position: absolute; inset: 0; background: rgba(31,22,18,.86); color: var(--term-fg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px; font-weight: 700; font-size: 16px; }
 .term-overlay small { font-size: 13px; font-weight: 500; color: var(--term-dim); max-width: 420px; }
+.cmds { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--term-chrome); border-top: 1px solid #3A2A22; overflow-x: auto; flex: none; scrollbar-width: none; }
+.cmds:empty { display: none; }
+.cmds button { flex: none; min-height: 44px; max-width: 280px; padding: 0 14px; border: 1px solid #4A372D; border-radius: var(--r-control); background: var(--term-bg); color: var(--term-fg); font: 500 13px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; touch-action: manipulation; }
+.cmds button.clip { display: inline-flex; align-items: center; gap: 8px; font: 700 13px var(--ui); border-color: var(--term-prompt); color: var(--term-prompt); }
+.cmds button.clip .icon { width: 18px; height: 18px; }
+.cmds button.cmd:hover { border-color: var(--term-prompt); }
+.cmds button.tool { border-style: dashed; color: var(--term-dim); font: 700 13px var(--ui); }
+.cmds button.tool[aria-pressed=true] { border-style: solid; background: var(--term-prompt); border-color: var(--term-prompt); color: var(--term-bg); }
+.cmds.editing button.cmd { border-color: var(--term-prompt); border-style: dashed; }
+.cmds .hint { flex: none; color: var(--term-dim); font-size: 13px; font-weight: 600; }
+.tick { display: flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 600; font-size: 14px; cursor: pointer; }
+.tick input { width: 20px; height: 20px; margin: 0; accent-color: var(--primary); flex: none; }
 .keys { display: none; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; padding: 6px; background: var(--term-chrome); border-top: 1px solid #3A2A22; flex: none; }
 .keys button { min-height: 44px; border: 0; border-radius: 8px; background: var(--term-key); color: var(--term-fg); font: 500 13px var(--mono); display: flex; align-items: center; justify-content: center; padding: 0; touch-action: manipulation; }
 .keys button[aria-pressed=true] { background: var(--term-prompt); color: var(--term-bg); }
